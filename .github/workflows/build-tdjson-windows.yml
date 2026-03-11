@@ -21,9 +21,9 @@ jobs:
     timeout-minutes: 90
 
     env:
-      VCPKG_ROOT: ${{ runner.temp }}\vcpkg
-      TDLIB_ROOT: ${{ runner.temp }}\td
-      TD_BUILD_DIR: ${{ runner.temp }}\td-build
+      VCPKG_ROOT: ${{ github.workspace }}\.cache\vcpkg
+      TDLIB_ROOT: ${{ github.workspace }}\.cache\td
+      TD_BUILD_DIR: ${{ github.workspace }}\.cache\td-build
       VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
 
     steps:
