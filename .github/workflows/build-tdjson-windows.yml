@@ -1,0 +1,118 @@
+name: Build tdjson.dll (Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tdlib_ref:
+        description: TDLib Git 引用（tag、branch 或 commit）
+        required: false
+        default: master
+      upload_name:
+        description: 上传产物名称
+        required: false
+        default: tdjson-windows-x64
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    env:
+      VCPKG_ROOT: ${{ runner.temp }}\vcpkg
+      TDLIB_ROOT: ${{ runner.temp }}\td
+      TD_BUILD_DIR: ${{ runner.temp }}\td-build
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install required tools
+        shell: pwsh
+        run: |
+          choco install gperf nasm -y --no-progress
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}
+          key: vcpkg-windows-tdjson-${{ runner.os }}-${{ env.VCPKG_DEFAULT_TRIPLET }}-openssl-zlib-v1
+
+      - name: Clone and bootstrap vcpkg
+        shell: pwsh
+        run: |
+          if (-not (Test-Path $env:VCPKG_ROOT)) {
+            git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          }
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+
+      - name: Install vcpkg dependencies
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            "openssl:$env:VCPKG_DEFAULT_TRIPLET" `
+            "zlib:$env:VCPKG_DEFAULT_TRIPLET"
+
+      - name: Clone TDLib
+        shell: pwsh
+        run: |
+          git clone https://github.com/tdlib/td.git $env:TDLIB_ROOT
+          Set-Location $env:TDLIB_ROOT
+          git checkout "${{ github.event.inputs.tdlib_ref }}"
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -S $env:TDLIB_ROOT -B $env:TD_BUILD_DIR -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET `
+            -DTD_ENABLE_JNI=OFF `
+            -DTD_ENABLE_DOTNET=OFF `
+            -DTD_ENABLE_TESTS=OFF
+
+      - name: Build tdjson
+        shell: pwsh
+        run: |
+          cmake --build $env:TD_BUILD_DIR --config Release --target tdjson --parallel
+
+      - name: Collect build artifacts
+        id: collect
+        shell: pwsh
+        run: |
+          $artifactDir = Join-Path $env:RUNNER_TEMP "tdjson-artifact"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          $tdjsonDll = Get-ChildItem -Path $env:TD_BUILD_DIR -Recurse -Filter tdjson.dll | Select-Object -First 1
+          if (-not $tdjsonDll) {
+            throw "未找到 tdjson.dll"
+          }
+
+          Copy-Item $tdjsonDll.FullName (Join-Path $artifactDir "tdjson.dll") -Force
+
+          $tdjsonLib = Get-ChildItem -Path $env:TD_BUILD_DIR -Recurse -Filter tdjson.lib | Select-Object -First 1
+          if ($tdjsonLib) {
+            Copy-Item $tdjsonLib.FullName (Join-Path $artifactDir "tdjson.lib") -Force
+          }
+
+          $tdjsonPdb = Get-ChildItem -Path $env:TD_BUILD_DIR -Recurse -Filter tdjson.pdb | Select-Object -First 1
+          if ($tdjsonPdb) {
+            Copy-Item $tdjsonPdb.FullName (Join-Path $artifactDir "tdjson.pdb") -Force
+          }
+
+          "artifact_dir=$artifactDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.upload_name }}
+          path: ${{ steps.collect.outputs.artifact_dir }}
+          if-no-files-found: error
+          retention-days: 7
