@@ -24,7 +24,7 @@ jobs:
       AIGRAM_VCPKG_ROOT: ${{ github.workspace }}\.cache\vcpkg
       AIGRAM_TDLIB_ROOT: ${{ github.workspace }}\.cache\td
       AIGRAM_TD_BUILD_DIR: ${{ github.workspace }}\.cache\td-build
-      AIGRAM_VCPKG_TRIPLET: x64-windows-static-md
+      AIGRAM_VCPKG_TRIPLET: x64-windows
 
     steps:
       - name: Checkout repository
@@ -42,8 +42,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${{ env.AIGRAM_VCPKG_ROOT }}
-          key: vcpkg-windows-tdjson-${{ runner.os }}-${{ env.AIGRAM_VCPKG_TRIPLET }}-openssl-zlib-v1
+            ${{ env.AIGRAM_VCPKG_ROOT }}\downloads
+            ${{ env.AIGRAM_VCPKG_ROOT }}\installed
+          key: vcpkg-windows-tdjson-${{ runner.os }}-${{ env.AIGRAM_VCPKG_TRIPLET }}-openssl-zlib-v3
 
       - name: Clone and bootstrap vcpkg
         shell: pwsh
@@ -63,9 +64,47 @@ jobs:
       - name: Clone TDLib
         shell: pwsh
         run: |
+          if (Test-Path $env:AIGRAM_TDLIB_ROOT) {
+            Remove-Item -Recurse -Force $env:AIGRAM_TDLIB_ROOT
+          }
+          if (Test-Path $env:AIGRAM_TD_BUILD_DIR) {
+            Remove-Item -Recurse -Force $env:AIGRAM_TD_BUILD_DIR
+          }
           git clone https://github.com/tdlib/td.git $env:AIGRAM_TDLIB_ROOT
           Set-Location $env:AIGRAM_TDLIB_ROOT
           git checkout "${{ github.event.inputs.tdlib_ref }}"
+
+      - name: Resolve dependency paths
+        id: deps
+        shell: pwsh
+        run: |
+          $installedRoot = Join-Path $env:AIGRAM_VCPKG_ROOT "installed\$env:AIGRAM_VCPKG_TRIPLET"
+          $zlibInclude = Join-Path $installedRoot "include"
+          $zlibLibrary = Get-ChildItem -Path (Join-Path $installedRoot "lib") -Filter "zlib*.lib" | Select-Object -First 1
+          $opensslRoot = $installedRoot
+
+          if (-not $zlibLibrary) {
+            throw "未找到 zlib 库文件，已检查目录: $installedRoot\lib"
+          }
+
+          Write-Host "installed root: $installedRoot"
+          Write-Host "zlib include : $zlibInclude"
+          Write-Host "zlib library : $($zlibLibrary.FullName)"
+          Write-Host "openssl root : $opensslRoot"
+          Get-ChildItem -Path (Join-Path $installedRoot "lib") | Select-Object Name | Format-Table -AutoSize
+
+          "installed_root=$installedRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "zlib_include=$zlibInclude" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "zlib_library=$($zlibLibrary.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "openssl_root=$opensslRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Show CMake toolchain context
+        shell: pwsh
+        run: |
+          Write-Host "toolchain: $env:AIGRAM_VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+          Write-Host "triplet  : $env:AIGRAM_VCPKG_TRIPLET"
+          Write-Host "source   : $env:AIGRAM_TDLIB_ROOT"
+          Write-Host "build    : $env:AIGRAM_TD_BUILD_DIR"
 
       - name: Configure CMake
         shell: pwsh
@@ -74,9 +113,12 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="$env:AIGRAM_VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=$env:AIGRAM_VCPKG_TRIPLET `
+            -DCMAKE_PREFIX_PATH="${{ steps.deps.outputs.installed_root }}" `
+            -DZLIB_INCLUDE_DIR="${{ steps.deps.outputs.zlib_include }}" `
+            -DZLIB_LIBRARY="${{ steps.deps.outputs.zlib_library }}" `
+            -DOPENSSL_ROOT_DIR="${{ steps.deps.outputs.openssl_root }}" `
             -DTD_ENABLE_JNI=OFF `
-            -DTD_ENABLE_DOTNET=OFF `
-            -DTD_ENABLE_TESTS=OFF
+            -DTD_ENABLE_DOTNET=OFF
 
       - name: Build tdjson
         shell: pwsh
@@ -88,6 +130,7 @@ jobs:
         shell: pwsh
         run: |
           $artifactDir = Join-Path $env:RUNNER_TEMP "tdjson-artifact"
+          $installedRoot = "${{ steps.deps.outputs.installed_root }}"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
           $tdjsonDll = Get-ChildItem -Path $env:AIGRAM_TD_BUILD_DIR -Recurse -Filter tdjson.dll | Select-Object -First 1
@@ -107,7 +150,23 @@ jobs:
             Copy-Item $tdjsonPdb.FullName (Join-Path $artifactDir "tdjson.pdb") -Force
           }
 
+          Get-ChildItem -Path (Join-Path $installedRoot "bin") -Filter "*.dll" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^(libcrypto|libssl|zlib1).*\.dll$' } |
+            ForEach-Object {
+              Copy-Item $_.FullName (Join-Path $artifactDir $_.Name) -Force
+            }
+
+          Compress-Archive -Path (Join-Path $artifactDir '*') -DestinationPath (Join-Path $env:RUNNER_TEMP 'tdjson-windows-x64.zip') -Force
+
           "artifact_dir=$artifactDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.upload_name }}-zip
+          path: ${{ runner.temp }}\tdjson-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
