@@ -21,10 +21,10 @@ jobs:
     timeout-minutes: 90
 
     env:
-      VCPKG_ROOT: ${{ github.workspace }}\.cache\vcpkg
-      TDLIB_ROOT: ${{ github.workspace }}\.cache\td
-      TD_BUILD_DIR: ${{ github.workspace }}\.cache\td-build
-      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
+      AIGRAM_VCPKG_ROOT: ${{ github.workspace }}\.cache\vcpkg
+      AIGRAM_TDLIB_ROOT: ${{ github.workspace }}\.cache\td
+      AIGRAM_TD_BUILD_DIR: ${{ github.workspace }}\.cache\td-build
+      AIGRAM_VCPKG_TRIPLET: x64-windows-static-md
 
     steps:
       - name: Checkout repository
@@ -42,38 +42,38 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ${{ env.VCPKG_ROOT }}
-          key: vcpkg-windows-tdjson-${{ runner.os }}-${{ env.VCPKG_DEFAULT_TRIPLET }}-openssl-zlib-v1
+            ${{ env.AIGRAM_VCPKG_ROOT }}
+          key: vcpkg-windows-tdjson-${{ runner.os }}-${{ env.AIGRAM_VCPKG_TRIPLET }}-openssl-zlib-v1
 
       - name: Clone and bootstrap vcpkg
         shell: pwsh
         run: |
-          if (-not (Test-Path $env:VCPKG_ROOT)) {
-            git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          if (-not (Test-Path $env:AIGRAM_VCPKG_ROOT)) {
+            git clone https://github.com/microsoft/vcpkg.git $env:AIGRAM_VCPKG_ROOT
           }
-          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          & "$env:AIGRAM_VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
 
       - name: Install vcpkg dependencies
         shell: pwsh
         run: |
-          & "$env:VCPKG_ROOT\vcpkg.exe" install `
-            "openssl:$env:VCPKG_DEFAULT_TRIPLET" `
-            "zlib:$env:VCPKG_DEFAULT_TRIPLET"
+          & "$env:AIGRAM_VCPKG_ROOT\vcpkg.exe" install `
+            "openssl:$env:AIGRAM_VCPKG_TRIPLET" `
+            "zlib:$env:AIGRAM_VCPKG_TRIPLET"
 
       - name: Clone TDLib
         shell: pwsh
         run: |
-          git clone https://github.com/tdlib/td.git $env:TDLIB_ROOT
-          Set-Location $env:TDLIB_ROOT
+          git clone https://github.com/tdlib/td.git $env:AIGRAM_TDLIB_ROOT
+          Set-Location $env:AIGRAM_TDLIB_ROOT
           git checkout "${{ github.event.inputs.tdlib_ref }}"
 
       - name: Configure CMake
         shell: pwsh
         run: |
-          cmake -S $env:TDLIB_ROOT -B $env:TD_BUILD_DIR -A x64 `
+          cmake -S $env:AIGRAM_TDLIB_ROOT -B $env:AIGRAM_TD_BUILD_DIR -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET `
+            -DCMAKE_TOOLCHAIN_FILE="$env:AIGRAM_VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=$env:AIGRAM_VCPKG_TRIPLET `
             -DTD_ENABLE_JNI=OFF `
             -DTD_ENABLE_DOTNET=OFF `
             -DTD_ENABLE_TESTS=OFF
@@ -81,7 +81,7 @@ jobs:
       - name: Build tdjson
         shell: pwsh
         run: |
-          cmake --build $env:TD_BUILD_DIR --config Release --target tdjson --parallel
+          cmake --build $env:AIGRAM_TD_BUILD_DIR --config Release --target tdjson --parallel
 
       - name: Collect build artifacts
         id: collect
@@ -90,19 +90,19 @@ jobs:
           $artifactDir = Join-Path $env:RUNNER_TEMP "tdjson-artifact"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
 
-          $tdjsonDll = Get-ChildItem -Path $env:TD_BUILD_DIR -Recurse -Filter tdjson.dll | Select-Object -First 1
+          $tdjsonDll = Get-ChildItem -Path $env:AIGRAM_TD_BUILD_DIR -Recurse -Filter tdjson.dll | Select-Object -First 1
           if (-not $tdjsonDll) {
             throw "未找到 tdjson.dll"
           }
 
           Copy-Item $tdjsonDll.FullName (Join-Path $artifactDir "tdjson.dll") -Force
 
-          $tdjsonLib = Get-ChildItem -Path $env:TD_BUILD_DIR -Recurse -Filter tdjson.lib | Select-Object -First 1
+          $tdjsonLib = Get-ChildItem -Path $env:AIGRAM_TD_BUILD_DIR -Recurse -Filter tdjson.lib | Select-Object -First 1
           if ($tdjsonLib) {
             Copy-Item $tdjsonLib.FullName (Join-Path $artifactDir "tdjson.lib") -Force
           }
 
-          $tdjsonPdb = Get-ChildItem -Path $env:TD_BUILD_DIR -Recurse -Filter tdjson.pdb | Select-Object -First 1
+          $tdjsonPdb = Get-ChildItem -Path $env:AIGRAM_TD_BUILD_DIR -Recurse -Filter tdjson.pdb | Select-Object -First 1
           if ($tdjsonPdb) {
             Copy-Item $tdjsonPdb.FullName (Join-Path $artifactDir "tdjson.pdb") -Force
           }
