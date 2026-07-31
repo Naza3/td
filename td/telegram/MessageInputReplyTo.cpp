@@ -58,6 +58,7 @@ MessageInputReplyTo::MessageInputReplyTo(Td *td,
       }
       message_id_ = message_id;
       dialog_id_ = dialog_id;
+      debug_source_ = "inputReplyToMessage";
 
       quote_ = MessageQuote(td, reply_to);
       todo_item_id_ = reply_to->todo_item_id_;
@@ -71,6 +72,10 @@ MessageInputReplyTo::MessageInputReplyTo(Td *td,
       // auto reply_to = telegram_api::move_object_as<telegram_api::inputReplyToMonoForum>(input_reply_to);
       break;
     }
+    case telegram_api::inputReplyToEphemeralMessage::ID: {
+      // auto reply_to = telegram_api::move_object_as<telegram_api::inputReplyToEphemeralMessage>(input_reply_to);
+      break;
+    }
     default:
       UNREACHABLE();
   }
@@ -79,6 +84,7 @@ MessageInputReplyTo::MessageInputReplyTo(Td *td,
 MessageInputReplyTo MessageInputReplyTo::regular(MessageId message_id) {
   MessageInputReplyTo result;
   result.message_id_ = message_id;
+  result.debug_source_ = "regular";
   return result;
 }
 
@@ -105,6 +111,9 @@ telegram_api::object_ptr<telegram_api::InputReplyTo> MessageInputReplyTo::get_in
                                                                       story_full_id_.get_story_id().get());
   }
   CHECK(!message_topic.is_saved_messages());
+  if (ephemeral_message_id_.is_valid()) {
+    return telegram_api::make_object<telegram_api::inputReplyToEphemeralMessage>(ephemeral_message_id_.get());
+  }
   auto reply_to_message_id = message_id_;
   if (reply_to_message_id == MessageId()) {
     if (message_topic.is_monoforum()) {
@@ -146,7 +155,9 @@ telegram_api::object_ptr<telegram_api::InputReplyTo> MessageInputReplyTo::get_in
     flags |= telegram_api::inputReplyToMessage::POLL_OPTION_MASK;
   }
   if (reply_to_message_id != MessageId() && !reply_to_message_id.is_server()) {
-    LOG(FATAL) << *this << " in " << message_topic << " in " << for_dialog_id << " with flags " << with_flags;
+    LOG(FATAL) << *this << " in " << message_topic << " in " << for_dialog_id << " for "
+               << (for_draft ? "draft" : "message") << " with flags " << with_flags << " from "
+               << (debug_source_ == nullptr ? "null" : debug_source_);
   }
   auto result = telegram_api::make_object<telegram_api::inputReplyToMessage>(
       flags, reply_to_message_id.get_server_message_id().get(), top_msg_id, std::move(input_peer), string(), Auto(), 0,
@@ -187,8 +198,8 @@ MessageFullId MessageInputReplyTo::get_reply_message_full_id(DialogId owner_dial
 }
 
 bool operator==(const MessageInputReplyTo &lhs, const MessageInputReplyTo &rhs) {
-  return lhs.message_id_ == rhs.message_id_ && lhs.dialog_id_ == rhs.dialog_id_ &&
-         lhs.story_full_id_ == rhs.story_full_id_ && lhs.quote_ == rhs.quote_ &&
+  return lhs.message_id_ == rhs.message_id_ && lhs.ephemeral_message_id_ == rhs.ephemeral_message_id_ &&
+         lhs.dialog_id_ == rhs.dialog_id_ && lhs.story_full_id_ == rhs.story_full_id_ && lhs.quote_ == rhs.quote_ &&
          lhs.todo_item_id_ == rhs.todo_item_id_ && lhs.poll_option_id_ == rhs.poll_option_id_;
 }
 
@@ -197,6 +208,9 @@ bool operator!=(const MessageInputReplyTo &lhs, const MessageInputReplyTo &rhs) 
 }
 
 StringBuilder &operator<<(StringBuilder &string_builder, const MessageInputReplyTo &input_reply_to) {
+  if (input_reply_to.ephemeral_message_id_.is_valid()) {
+    return string_builder << input_reply_to.ephemeral_message_id_;
+  }
   if (input_reply_to.message_id_.is_valid() || input_reply_to.message_id_.is_valid_scheduled()) {
     string_builder << input_reply_to.message_id_;
     if (input_reply_to.dialog_id_ != DialogId()) {

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "td/telegram/DialogId.h"
+#include "td/telegram/EphemeralMessageId.h"
 #include "td/telegram/MessageFullId.h"
 #include "td/telegram/MessageId.h"
 #include "td/telegram/MessageQuote.h"
@@ -26,10 +27,12 @@ class Td;
 
 class MessageInputReplyTo {
   MessageId message_id_;
+  EphemeralMessageId ephemeral_message_id_;
   DialogId dialog_id_;
   MessageQuote quote_;
   int32 todo_item_id_ = 0;
   string poll_option_id_;
+  const char *debug_source_ = "unknown";
   // or
   StoryFullId story_full_id_;
 
@@ -47,13 +50,15 @@ class MessageInputReplyTo {
   MessageInputReplyTo &operator=(MessageInputReplyTo &&) = default;
   ~MessageInputReplyTo();
 
-  MessageInputReplyTo(MessageId message_id, DialogId dialog_id, MessageQuote quote, int32 todo_item_id,
-                      const string &poll_option_id)
+  MessageInputReplyTo(MessageId message_id, EphemeralMessageId ephemeral_message_id, DialogId dialog_id,
+                      MessageQuote quote, int32 todo_item_id, const string &poll_option_id, const char *debug_source)
       : message_id_(message_id)
+      , ephemeral_message_id_(ephemeral_message_id)
       , dialog_id_(dialog_id)
       , quote_(std::move(quote))
       , todo_item_id_(todo_item_id)
-      , poll_option_id_(poll_option_id) {
+      , poll_option_id_(poll_option_id)
+      , debug_source_(debug_source) {
   }
 
   explicit MessageInputReplyTo(StoryFullId story_full_id) : story_full_id_(story_full_id) {
@@ -65,7 +70,8 @@ class MessageInputReplyTo {
   MessageInputReplyTo(Td *td, telegram_api::object_ptr<telegram_api::InputReplyTo> &&input_reply_to);
 
   bool is_empty() const {
-    return !message_id_.is_valid() && !message_id_.is_valid_scheduled() && !story_full_id_.is_valid();
+    return !message_id_.is_valid() && !message_id_.is_valid_scheduled() && !ephemeral_message_id_.is_valid() &&
+           !story_full_id_.is_valid();
   }
 
   bool is_valid() const {
@@ -96,7 +102,8 @@ class MessageInputReplyTo {
     if (story_full_id_.is_valid()) {
       return MessageInputReplyTo(story_full_id_);
     }
-    return MessageInputReplyTo(message_id_, dialog_id_, quote_.clone(), todo_item_id_, poll_option_id_);
+    return MessageInputReplyTo(message_id_, ephemeral_message_id_, dialog_id_, quote_.clone(), todo_item_id_,
+                               poll_option_id_, debug_source_);
   }
 
   void add_dependencies(Dependencies &dependencies) const;
@@ -109,9 +116,10 @@ class MessageInputReplyTo {
   // only for draft messages
   td_api::object_ptr<td_api::InputMessageReplyTo> get_input_message_reply_to_object(Td *td) const;
 
-  void set_message_id(MessageId new_message_id) {
+  void set_message_id(MessageId new_message_id, const char *source) {
     CHECK(message_id_.is_valid() || message_id_.is_valid_scheduled());
     message_id_ = new_message_id;
+    debug_source_ = source;
   }
 
   MessageId get_same_chat_reply_to_message_id() const;
