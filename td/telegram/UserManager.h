@@ -136,6 +136,8 @@ class UserManager final : public Actor {
 
   void register_suggested_profile_photo(const Photo &photo);
 
+  void on_update_user_linked_community_id(UserId user_id, CommunityId linked_community_id);
+
   void on_update_user_emoji_status(UserId user_id, telegram_api::object_ptr<telegram_api::EmojiStatus> &&emoji_status);
 
   void on_update_user_story_ids(UserId user_id, telegram_api::object_ptr<telegram_api::recentStory> &&recent_story,
@@ -661,6 +663,9 @@ class UserManager final : public Actor {
     bool stories_hidden = false;
     bool contact_require_premium = false;
     bool has_live_story = false;
+    bool is_noforwards_inited = false;
+    bool noforwards_my_enabled = false;
+    bool noforwards_peer_enabled = false;
 
     bool is_photo_inited = false;
 
@@ -1022,8 +1027,8 @@ class UserManager final : public Actor {
 
   void on_update_user_full_wallpaper_overridden(UserFull *user_full, bool wallpaper_overridden) const;
 
-  void on_update_user_full_noforwards(UserFull *user_full, bool update_my, bool noforwards_my_enabled, bool update_peer,
-                                      bool noforwards_peer_enabled) const;
+  void on_update_user_full_noforwards(UserFull *user_full, User *u, UserId user_id, bool update_my,
+                                      bool noforwards_my_enabled, bool update_peer, bool noforwards_peer_enabled);
 
   static void on_update_user_full_menu_button(UserFull *user_full,
                                               telegram_api::object_ptr<telegram_api::BotMenuButton> &&bot_menu_button);
