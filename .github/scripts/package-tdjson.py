@@ -38,6 +38,13 @@ def main():
     with tempfile.TemporaryDirectory(prefix="tdjson-package-") as temporary:
         stage = Path(temporary) / name
         shutil.copytree(sdk, stage, symlinks=True)
+        # Upstream embeds the build machine's install prefix in pkg-config files.
+        for metadata in (stage / "lib/pkgconfig").glob("*.pc"):
+            contents = metadata.read_text(encoding="utf-8")
+            metadata.write_text(re.sub(r"(?m)^prefix=.*$", "prefix=${pcfiledir}/../..", contents), encoding="utf-8")
+        readme = ROOT / ".github/TDJSON-RELEASE.md"
+        if readme.is_file():
+            shutil.copy2(readme, stage / "README.md")
         licenses = stage / "licenses"
         licenses.mkdir(exist_ok=True)
         shutil.copy2(ROOT / "LICENSE_1_0.txt", licenses / "TDLib-LICENSE_1_0.txt")

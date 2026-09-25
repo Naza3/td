@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build and exercise a relocatable desktop TDLib JSON SDK on a native host."""
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
@@ -43,6 +44,8 @@ def main():
         dependencies.append(vcpkg / 'installed' / triplet)
         common += [f'-DCMAKE_TOOLCHAIN_FILE={vcpkg}/scripts/buildsystems/vcpkg.cmake',
                    f'-DVCPKG_TARGET_TRIPLET={triplet}', '-DVCPKG_MANIFEST_MODE=OFF',
+                   # TDLib's vcpkg install rule expects DLLs in the config subdirectory.
+                   f'-DCMAKE_RUNTIME_OUTPUT_DIRECTORY={build}/Release',
                    '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW',
                    '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded']
     elif args.platform.startswith('linux-'):
@@ -81,8 +84,9 @@ def main():
         with tarfile.open(root / 'dist' / f'{basename}.tar.gz') as archive:
             archive.extractall(extracted, filter='data')
     sdk = extracted / basename
+    metadata = json.loads((sdk / 'BUILD-INFO.json').read_text(encoding='utf-8'))
     run(sys.executable, scripts / 'check-tdjson.py', '--prefix', sdk,
-        '--platform', args.platform)
+        '--platform', args.platform, '--commit', commit, '--version', metadata['version'])
     smoke = root / 'build-smoke'
     run('cmake', '-S', scripts / 'smoke', '-B', smoke, '-G', 'Ninja',
         '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_PREFIX_PATH={sdk}', *consumer)
@@ -93,7 +97,10 @@ def main():
         for dll in (sdk / 'bin').glob('*.dll'):
             shutil.copy2(dll, smoke / dll.name)
         executable = smoke / 'tdjson-smoke.exe'
-        run('dumpbin', '/dependents', sdk / 'bin/tdjson.dll')
+        linked = output('dumpbin', '/dependents', str(sdk / 'bin/tdjson.dll'))
+        print(linked, flush=True)
+        if any(name in linked.lower() for name in ('libcrypto', 'libssl', 'zlib', 'vcruntime', 'msvcp')):
+            raise RuntimeError('SDK unexpectedly depends on an external crypto/zlib/MSVC runtime DLL')
     else:
         executable = smoke / 'tdjson-smoke'
         loader = 'DYLD_LIBRARY_PATH' if sys.platform == 'darwin' else 'LD_LIBRARY_PATH'
