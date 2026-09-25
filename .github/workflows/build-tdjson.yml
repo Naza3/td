@@ -1,0 +1,149 @@
+name: Build TDLib native SDKs
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/build-tdjson.yml'
+      - '.github/scripts/**'
+      - 'CMakeLists.txt'
+      - 'CMake/**'
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tdjson-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            runner: windows-2022
+            arch: x64
+          - platform: windows-arm64
+            runner: windows-11-arm
+            arch: arm64
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            arch: x64
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+          - platform: macos-x64
+            runner: macos-15-intel
+            arch: x64
+          - platform: macos-arm64
+            runner: macos-15
+            arch: arm64
+    env:
+      # Conservative parallelism: TDLib's generated C++ files use substantial RAM.
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      VCPKG_COMMIT: e143402b5545bab137cc465225a82da63cb2148f
+      VCPKG_DEFAULT_TRIPLET: ${{ matrix.arch }}-windows-static
+      VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.arch }}-windows
+    steps:
+      - name: Check out the requested repository revision
+        uses: actions/checkout@v4
+        with:
+          # On release events github.ref is the published tag, never upstream master.
+          persist-credentials: false
+
+      - name: Set up native Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.arch }}
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+
+      - name: Check out pinned vcpkg
+        if: runner.os == 'Windows'
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.VCPKG_COMMIT }}
+          path: .deps/vcpkg
+          persist-credentials: false
+
+      - name: Install Windows build dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & .deps/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed' }
+          & .deps/vcpkg/vcpkg.exe install "openssl:$env:VCPKG_DEFAULT_TRIPLET" "zlib:$env:VCPKG_DEFAULT_TRIPLET" "gperf:$env:VCPKG_DEFAULT_HOST_TRIPLET" --disable-metrics
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg install failed' }
+          "$env:GITHUB_WORKSPACE/.deps/vcpkg/installed/$env:VCPKG_DEFAULT_HOST_TRIPLET/tools/gperf" >> $env:GITHUB_PATH
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang gperf libssl-dev zlib1g-dev
+
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja gperf openssl@3 zlib
+
+      - name: Build, package and test the extracted SDK
+        env:
+          TDLIB_PLATFORM: ${{ matrix.platform }}
+        run: python .github/scripts/build-tdjson.py --platform ${{ matrix.platform }}
+
+      - name: Upload tested SDK and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: tdjson-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  release:
+    name: Attach SDKs to published Release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download all tested SDKs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tdjson-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify complete release assets
+        working-directory: dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          for platform in windows-x64 windows-arm64 linux-x64 linux-arm64 macos-x64 macos-arm64; do
+            extension=tar.gz
+            if [[ "$platform" == windows-* ]]; then extension=zip; fi
+            test -s "tdjson-$platform.$extension"
+            sha256sum --check "tdjson-$platform.$extension.sha256"
+          done
+
+      - name: Attach assets to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber
