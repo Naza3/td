@@ -1,27 +1,55 @@
 name: Build TDLib native SDKs
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing v* tag to build and publish; leave empty for a test build'
+        type: string
+        required: false
+        default: ''
   pull_request:
     paths:
       - '.github/workflows/build-tdjson.yml'
       - '.github/scripts/**'
       - 'CMakeLists.txt'
       - 'CMake/**'
-  release:
-    types: [published]
 
 permissions:
   contents: read
 
 concurrency:
-  group: tdjson-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: tdjson-${{ inputs.release_tag || github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  prepare:
+    name: Validate publishing logic and resolve source
+    if: github.event_name != 'push' || !github.event.deleted
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      release_tag: ${{ steps.source.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test release validation and publication safeguards
+        run: python .github/scripts/test-release-tdjson.py
+      - name: Resolve the exact source commit
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python .github/scripts/release-tdjson.py resolve
+
   build:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
+    needs: prepare
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -52,10 +80,16 @@ jobs:
       VCPKG_DEFAULT_TRIPLET: ${{ matrix.arch }}-windows-static
       VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.arch }}-windows
     steps:
-      - name: Check out the requested repository revision
+      - name: Check out CI tooling
         uses: actions/checkout@v4
         with:
-          # On release events github.ref is the published tag, never upstream master.
+          persist-credentials: false
+
+      - name: Check out the resolved source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          path: .source/td
           persist-credentials: false
 
       - name: Set up native Python
@@ -102,7 +136,7 @@ jobs:
       - name: Build, package and test the extracted SDK
         env:
           TDLIB_PLATFORM: ${{ matrix.platform }}
-        run: python .github/scripts/build-tdjson.py --platform ${{ matrix.platform }}
+        run: python .github/scripts/build-tdjson.py --platform ${{ matrix.platform }} --source .source/td
 
       - name: Upload tested SDK and checksum
         uses: actions/upload-artifact@v4
@@ -114,14 +148,19 @@ jobs:
           compression-level: 0
 
   release:
-    name: Attach SDKs to published Release
-    if: github.event_name == 'release'
-    needs: build
+    name: Publish the tested SDKs
+    if: needs.prepare.outputs.release_tag != ''
+    needs: [prepare, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
+      - name: Check out CI tooling
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Download all tested SDKs
         uses: actions/download-artifact@v4
         with:
@@ -141,9 +180,9 @@ jobs:
             sha256sum --check "tdjson-$platform.$extension.sha256"
           done
 
-      - name: Attach assets to the existing release
+      - name: Create draft, upload and verify all assets, then publish
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" dist/* --clobber
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: python .github/scripts/release-tdjson.py publish --dist dist

@@ -21,9 +21,11 @@ def main():
     parser.add_argument("--platform", required=True, choices=PLATFORMS)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--version")
+    parser.add_argument("--source", type=Path, default=ROOT, help="TDLib source checkout")
     parser.add_argument("--dependency-root", action="append", default=[], type=Path)
     args = parser.parse_args()
-    version = args.version or re.search(r"project\(TDLib VERSION ([\d.]+)", (ROOT / "CMakeLists.txt").read_text())[1]
+    source_root = args.source.resolve()
+    version = args.version or re.search(r"project\(TDLib VERSION ([\d.]+)", (source_root / "CMakeLists.txt").read_text())[1]
     sdk = args.prefix.resolve()
     system = args.platform.split("-")[0]
     library = {"windows": "bin/tdjson.dll", "linux": "lib/libtdjson.so", "macos": "lib/libtdjson.dylib"}[system]
@@ -47,7 +49,7 @@ def main():
             shutil.copy2(readme, stage / "README.md")
         licenses = stage / "licenses"
         licenses.mkdir(exist_ok=True)
-        shutil.copy2(ROOT / "LICENSE_1_0.txt", licenses / "TDLib-LICENSE_1_0.txt")
+        shutil.copy2(source_root / "LICENSE_1_0.txt", licenses / "TDLib-LICENSE_1_0.txt")
         for index, dependency in enumerate(args.dependency_root):
             if not dependency.is_dir():
                 raise SystemExit(f"Dependency directory does not exist: {dependency}")
@@ -63,7 +65,7 @@ def main():
                     shutil.copy2(source, licenses / f"{package}-copyright")
         info = {"version": version, "commit": args.commit, "platform": args.platform, "interface": "TDLib JSON C API", "library": library}
         (stage / "BUILD-INFO.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
-        shutil.copy2(ROOT / "td/generate/scheme/td_api.tl", stage / "td_api.tl")
+        shutil.copy2(source_root / "td/generate/scheme/td_api.tl", stage / "td_api.tl")
         if system == "windows":
             with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
                 for source in sorted(stage.rglob("*")):

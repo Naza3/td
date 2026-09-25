@@ -1,7 +1,8 @@
 # TDLib 桌面客户端预编译库
 
 工作流：`.github/workflows/build-tdjson.yml`（Build TDLib native SDKs）。
-构建当前仓库的对应提交；发布 Release 时构建该 Release 的 tag，不下载上游 master。
+推送 `v*` 版本标签后，构建该标签的准确提交；六个平台验证成功后自动创建并发布 Release。
+源码来自本仓库，不下载上游 master。构建脚本与源码分开检出，因此也能补发不含新工作流的旧标签。
 
 | 资产 | 系统与架构 | 动态库 |
 | --- | --- | --- |
@@ -23,17 +24,29 @@ Linux 仍依赖系统 glibc、libstdc++ 等运行库，基线为 Ubuntu 24.04，
 
 ## 触发构建及发布
 
-1. 将工作流合并到 `master`。
-2. 仅测试：Actions → **Build TDLib native SDKs** → **Run workflow**，选择分支或 tag。
-   六个平台通过后，可在该次运行的 Artifacts 下载；保留 14 天。
-3. 正式发布：为含该工作流的提交创建 tag，在 GitHub Releases 点击 **Publish release**。
-   `release.published` 会自动构建、校验，再向已有 Release 上传六份 SDK 及六份校验文件。
-   正式版和预发布版均支持；仅保存草稿或只推 tag 不触发发布。
-4. 如构建失败，修复后重新运行；上传作业只在六个平台都成功时执行。
-   重跑相同 Release 的上传会覆盖同名资产，不会创建第二个 Release。
+1. 为包含工作流的提交创建版本标签并推送。标签使用 `v主版本.次版本.补丁版本`，
+   可带 `-rc.1` 等预发布后缀。版本号必须与该提交的 `CMakeLists.txt` 中 TDLib 版本一致。
+
+   ```sh
+   git tag v1.8.67
+   git push origin v1.8.67
+   ```
+
+   上述版本号只是示例，请先确认源码版本及标签是否已存在。无需手动创建 Release。
+2. 工作流会自动构建、检查六个平台，创建草稿 Release，上传并核对全部 12 个文件，
+   最后才公开发布。普通 `vX.Y.Z` 是正式版，带预发布后缀的标签发布为预发布版。
+   Latest 按 GitHub 的日期及语义版本规则确定，补发旧版本不强制替换较新版本。
+3. **补发已有标签**（包括工作流引入之前的旧标签）：Actions → **Build TDLib native SDKs** →
+   **Run workflow**，选择包含新工作流的 `master`，在 `release_tag` 填写现有标签（例如 `v1.8.0`）。
+   这会构建标签的源码并发布该版本，不移动或重建旧标签。
+4. **仅测试**：同一页面将 `release_tag` 留空。会构建所选分支/标签并保留 Actions 产物 14 天，
+   不创建 Release。普通推送分支不自动发布，手工创建 Release 也不会重复触发构建。
+5. 构建失败时不会创建公开 Release；上传中断时保留草稿，可重跑恢复。
+   已公开版本不会被覆盖。完整重跑若生成不同内容，应发布新的版本标签，而不是替换公开资产。
 
 修改构建工作流/脚本的 PR 也会自动执行六个平台的验证，不上传 Release。
-构建只需要默认 `GITHUB_TOKEN`；只有上传作业需要 `contents: write`。
+构建只需要默认 `GITHUB_TOKEN`；只有发布作业需要 `contents: write`，无需 PAT。
+标签推送与手动补发共用同一个构建/发布流程，不依赖 Release 事件串联第二次构建。
 
 ## 客户端接入
 
@@ -58,9 +71,11 @@ macOS 分发时保留 `libtdjson*.dylib`，设置应用的 `@rpath`，并在最�
 ## 自动验证内容
 
 - 从安装目录生成 SDK，再解压到另一目录，检查库文件和目标架构。
-- 使用原生 Python `ctypes` 加载解压的库，调用离线 JSON API，检查版本及提交哈希。
+- 使用原生 Python `ctypes` 加载解压的库，调用离线 JSON API 并检查版本。
+  新版本另检查运行期提交哈希；`v1.8.0` 没有该接口，改为核对精确检出的提交及包内构建信息。
 - 使用独立 CMake 工程通过 `find_package(Td)` 编译、链接并运行 C 客户端。
 - 检查 Unix 动态依赖，拒绝意外依赖 OpenSSL/zlib 动态库或 Homebrew 绝对路径。
 - 发布前检查六份归档齐全且 SHA-256 校验通过。
+- 发布前再次确认标签未移动，包内版本/提交与标签一致，上传后的资产摘要与本地一致。
 
 这些检查不需要 Telegram 账号或 API key；不覆盖账号登录、网络功能或旧系统兼容性。

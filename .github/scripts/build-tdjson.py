@@ -25,8 +25,11 @@ def main():
     parser.add_argument('--platform', required=True, choices=[
         'windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64',
         'macos-x64', 'macos-arm64'])
+    parser.add_argument('--source', type=Path, help='TDLib source checkout; defaults to the tooling checkout')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
+    source = (args.source or root).resolve()
+    legacy = 'TD_INSTALL_STATIC_LIBRARIES' not in (source / 'CMakeLists.txt').read_text(encoding='utf-8')
     os.chdir(root)
     scripts = root / '.github/scripts'
     build = root / 'build-sdk'
@@ -36,6 +39,9 @@ def main():
               '-DTD_ENABLE_JNI=OFF', '-DTD_ENABLE_DOTNET=OFF',
               '-DCMAKE_DISABLE_FIND_PACKAGE_Crc32c=ON', '-DOPENSSL_USE_STATIC_LIBS=ON',
               f'-DCMAKE_INSTALL_PREFIX={prefix}']
+    if legacy:
+        # Older release tags predate the split shared/static installation options.
+        common += ['-DCMAKE_POLICY_VERSION_MINIMUM=3.5']
     dependencies = []
     consumer = []
     if args.platform.startswith('windows-'):
@@ -62,13 +68,20 @@ def main():
                    f'-DZLIB_INCLUDE_DIR={zlib}/include', '-DCMAKE_INSTALL_NAME_DIR=@rpath',
                    *consumer]
 
-    run('cmake', '-S', root, '-B', build, '-G', 'Ninja', *common)
-    run('cmake', '--build', build, '--target', 'tdjson', '--parallel',
+    run('cmake', '-S', source, '-B', build, '-G', 'Ninja', *common)
+    targets = ['tdjson', 'tdjson_static'] if legacy else ['tdjson']
+    run('cmake', '--build', build, '--target', *targets, '--parallel',
         os.environ.get('CMAKE_BUILD_PARALLEL_LEVEL', '2'))
     run('cmake', '--install', build, '--config', 'Release')
-    commit = output('git', 'rev-parse', 'HEAD')
+    if legacy:
+        shared_prefix = root / 'install-shared-sdk'
+        run(sys.executable, scripts / 'stage-legacy-sdk.py', '--prefix', prefix,
+            '--output', shared_prefix, '--platform', args.platform)
+        prefix = shared_prefix
+    commit = output('git', '-C', str(source), 'rev-parse', 'HEAD')
     package = [sys.executable, scripts / 'package-tdjson.py', '--prefix', prefix,
-               '--output', root / 'dist', '--platform', args.platform, '--commit', commit]
+               '--output', root / 'dist', '--platform', args.platform, '--commit', commit,
+               '--source', source]
     for dependency in dependencies:
         package += ['--dependency-root', dependency]
     run(*package)
